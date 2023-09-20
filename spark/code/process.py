@@ -193,6 +193,7 @@ df3.writeStream \
 result = pd.concat(DOCUMENTS, axis=0, ignore_index=True)
 result.to_excel("Dataset.xlsx")
 
+
 '''df3.writeStream \
   .format("console") \
   .start() \
