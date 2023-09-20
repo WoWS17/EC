@@ -1,0 +1,153 @@
+version: '3.7'
+
+services:
+
+  zookeeper:
+    container_name: kafkaZK
+    build: 
+      context: kafka
+      dockerfile: Dockerfile
+    environment:
+      - KAFKA_ACTION=start-zk
+    networks:
+      ner:
+        ipv4_address: 10.0.100.22
+    ports:
+      - "2181:2181"
+
+
+  kafkaserver:
+    container_name: kafkaServer
+    build: 
+      context: kafka
+      dockerfile: Dockerfile
+    environment:
+      - KAFKA_ACTION=start-kafka
+    networks:
+      ner:
+        ipv4_address: 10.0.100.23
+    ports:
+      - "9092:9092"
+    depends_on:
+      - zookeeper
+
+
+  kafkatopic:
+    container_name: kafkaTopic
+    build: 
+      context: kafka
+      dockerfile: Dockerfile
+    environment:
+      - KAFKA_ACTION=create-topic
+      - KAKFA_SERVER=10.0.100.23
+      - KAFKA_TOPIC=ner
+    networks:
+      - ner
+    depends_on:
+      - kafkaserver
+
+
+  kafkaui:
+    container_name: kafkaUI
+    image: provectuslabs/kafka-ui:latest
+    environment:
+      - KAFKA_CLUSTERS_0_BOOTSTRAPSERVERS=10.0.100.23:9092
+      - KAFKA_CLUSTERS_0_ZOOKEEPER=10.0.100.22:2181
+    ports:
+      - "8080:8080"
+    depends_on:
+      - kafkaserver
+    networks:
+      - ner
+
+
+  logstash:
+    container_name: logstash
+    build: 
+      context: logstash
+      dockerfile: Dockerfile
+    networks:
+      ner:
+        ipv4_address: 10.0.100.21
+    ports:
+      - "5000:5000"
+    depends_on:
+      kafkatopic: 
+        condition: service_completed_successfully
+      spark:
+        condition: service_started
+    volumes:
+      - shared-data:/shared-data
+
+
+  spark: 
+    container_name: spark
+    build: 
+      context: spark
+      dockerfile: Dockerfile
+    environment:
+      - AZURE_OPENAI_ENDPOINT=$AZURE_OPENAI_ENDPOINT
+      - AZURE_OPENAI_KEY=$AZURE_OPENAI_KEY
+    ports:
+      - 4040:4040
+    networks:
+      ner:
+        ipv4_address: 10.0.100.11
+    depends_on:
+      elasticsearch:
+        condition: service_healthy # con questa condizione, il collegamento tra spark e ES sembra funzionare
+      kafkatopic: 
+        condition: service_completed_successfully
+    volumes:
+      - shared-data:/shared-data
+      
+
+  elasticsearch:
+    container_name: elasticsearch
+    build: 
+      context: elasticsearch
+      dockerfile: Dockerfile
+    environment:
+      - node.name=elasticsearch
+      - xpack.security.enabled=false
+      - discovery.type=single-node
+      - bootstrap.memory_lock=true
+      - "ES_JAVA_OPTS=-Xms512m -Xmx512m"
+      - cluster.routing.allocation.disk.threshold_enabled=false
+    networks:
+      ner:
+        ipv4_address: 10.0.100.51
+    ports:
+      - "9200:9200"
+      - "9300:9300"
+    healthcheck:
+      test: ["CMD-SHELL", "curl --silent localhost:9200/cluster/_health"]
+      interval: 30s
+      timeout: 30s
+      retries: 3
+  
+  
+  kibana:
+    build: 
+      context: kibana
+      dockerfile: Dockerfile
+    container_name: kibana
+    depends_on:
+      - elasticsearch
+    networks:
+      ner:
+        ipv4_address: 10.0.100.52
+    ports:
+      - 5601:5601
+
+
+networks:
+  ner:
+    name: ner
+    driver: bridge
+    ipam:
+     config:
+       - subnet: 10.0.100.1/24
+
+volumes:
+  shared-data:
